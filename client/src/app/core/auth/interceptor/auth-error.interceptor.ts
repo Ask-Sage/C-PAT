@@ -22,6 +22,9 @@ export const authErrorInterceptor: HttpInterceptorFn = (req, next) => {
   const oidcSecurityService = inject(OidcSecurityService);
   const messageService = inject(MessageService);
 
+  const stigmanDisabled = (CPAT as any)?.Env?.stigman?.clientId === (CPAT as any)?.Env?.oauth?.clientId || !(CPAT as any)?.Env?.stigman?.clientId;
+  const authConfigId = stigmanDisabled ? 'cpat' : 'stigman';
+
   const handleReauthentication = () => {
     sessionStorage.setItem('auth-redirect-url', globalThis.location.pathname + globalThis.location.search);
 
@@ -35,17 +38,20 @@ export const authErrorInterceptor: HttpInterceptorFn = (req, next) => {
 
       setTimeout(() => {
         if (confirm('Your session has expired. Click OK to login again. Make sure to save your work first!')) {
-          oidcSecurityService.authorize('stigman');
+          oidcSecurityService.authorize(authConfigId);
         }
       }, 100);
     } else {
-      oidcSecurityService.authorize('stigman');
+      oidcSecurityService.authorize(authConfigId);
     }
   };
 
   const performTokenRefresh = (): Promise<[LoginResponse, LoginResponse]> => {
     if (!refreshTokenPromise) {
-      refreshTokenPromise = Promise.all([firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'stigman')), firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'cpat'))]).finally(() => {
+      const refreshPromises = stigmanDisabled
+        ? [firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'cpat')), firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'cpat'))]
+        : [firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'stigman')), firstValueFrom(oidcSecurityService.forceRefreshSession({}, 'cpat'))];
+      refreshTokenPromise = (Promise.all(refreshPromises) as Promise<[LoginResponse, LoginResponse]>).finally(() => {
         refreshTokenPromise = null;
       });
     }
@@ -67,7 +73,7 @@ export const authErrorInterceptor: HttpInterceptorFn = (req, next) => {
 
       if (error.status === 401 && (error.error?.detail?.includes('jwt expired') || error.error?.detail?.includes('token expired'))) {
         const stigmanApiUrl = CPAT.Env.stigman.apiUrl;
-        const configId = req.url.includes(stigmanApiUrl) ? 'stigman' : 'cpat';
+        const configId = (!stigmanDisabled && req.url.includes(stigmanApiUrl)) ? 'stigman' : 'cpat';
 
         return defer(() => from(performTokenRefresh())).pipe(
           mergeMap(([stigmanResult, cpatResult]) => {

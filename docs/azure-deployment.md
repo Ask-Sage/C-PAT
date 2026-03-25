@@ -2,104 +2,162 @@
 
 ## Architecture
 
-C-PAT is deployed as a containerized application on Azure using the same pattern as AskSage-LLM-Manager:
+C-PAT and STIG Manager are deployed as containerized applications on Azure Government using Azure Container Apps:
 
 ```
-GitHub Actions → Azure Container Registry (ACR) → Azure Web App (Container)
+GitHub Actions → Azure Container Registry (ACR) → Azure Container Apps
                                                        ↓
                                               Azure Database for MySQL
-                                              Flexible Server
+                                              Flexible Server (shared)
 ```
 
-## Azure Resources Required
+Both apps share the same MySQL server (separate schemas) and Entra ID tenant for authentication.
 
-### 1. Azure Container Registry (ACR)
-- **Existing:** Use the same ACR as LLM Manager
-- Image: `<acr-login-server>/cpat:latest`
+## Azure Resources
 
-### 2. Azure Web App (Container)
-- **SKU:** B1 or S1 (minimal resource requirements)
-- **Runtime:** Linux container from ACR
-- **Port:** 8086
+### Resource Group: `asksage-cpat-rg`
 
-### 3. Azure Database for MySQL Flexible Server
-- **SKU:** Burstable B1ms (1 vCore, 2 GiB RAM) — sufficient for POA&M tracking
-- **Version:** 8.0
-- **Storage:** 20 GiB (auto-grow enabled)
-- **SSL:** Required (TLS 1.2+)
+| Resource | Name | SKU/Details |
+|----------|------|-------------|
+| ACR | `asksagecpat.azurecr.us` | Basic, admin enabled |
+| MySQL | `asksage-cpat-mysql` | Burstable B1ms, v8.4 |
+| Container Apps Env | `cpat-env` | usgovvirginia |
+| C-PAT | `cpat` container app | 0.5 CPU, 1Gi, port 8086 |
+| STIG Manager | `stigman` container app | 0.5 CPU, 1Gi, port 54000 |
 
-### 4. Entra ID App Registration (OIDC)
-- **Name:** `cpat-web`
-- **Type:** Single tenant
-- **Redirect URI:** `https://<web-app-name>.azurewebsites.net`
-- **Scopes:** `openid`, `profile`, `email`
+### Entra ID App Registrations (Commercial tenant: asksage.ai)
+
+| App | Client ID | Purpose |
+|-----|-----------|---------|
+| C-PAT | `d16e6e88-8eac-4e7d-bb2a-d2218065680f` | Primary OIDC for C-PAT |
+| C-PAT-StigManager | `e4f84457-4816-464f-9290-e7089ace2961` | OIDC for STIG Manager |
 
 ## Environment Variables
 
-### Required
+### C-PAT Container App
+
+#### Required
 | Variable | Description | Example |
 |---|---|---|
-| `CPAT_OIDC_PROVIDER` | Entra ID OIDC authority URL | `https://login.microsoftonline.us/<tenant-id>/v2.0` |
-| `CPAT_OIDC_CLIENT_ID` | Entra ID app registration client ID | `<app-client-id>` |
-| `CPAT_DB_HOST` | MySQL Flexible Server hostname | `cpat-db.mysql.database.azure.com` |
+| `CPAT_OIDC_PROVIDER` | Entra ID OIDC authority URL | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| `CPAT_OIDC_CLIENT_ID` | Entra ID app client ID | `d16e6e88-...` |
+| `CPAT_JWT_AUD_VALUE` | Expected JWT audience (use `api://<client-id>` for Entra) | `api://d16e6e88-...` |
+| `CPAT_JWT_SCOPE_CLAIM` | JWT scope claim name (`scp` for Entra, `scope` for Keycloak) | `scp` |
+| `CPAT_JWT_PRIVILEGES_CLAIM` | JWT privileges claim (`roles` for Entra, `realm_access.roles` for Keycloak) | `roles` |
+| `CPAT_JWT_ASSERTION_CLAIM` | JWT assertion claim (`uti` for Entra, `jti` for Keycloak) | `uti` |
+| `CPAT_JWT_USERNAME_CLAIM` | JWT username claim | `preferred_username` |
+| `CPAT_JWT_NAME_CLAIM` | JWT display name claim | `name` |
+| `CPAT_DB_HOST` | MySQL hostname | `<server>.mysql.database.usgovcloudapi.net` |
 | `CPAT_DB_PORT` | MySQL port | `3306` |
 | `CPAT_DB_USER` | Database username | `cpatadmin` |
 | `CPAT_DB_PASSWORD` | Database password | `<from-key-vault>` |
 | `CPAT_DB_SCHEMA` | Database name | `cpat` |
 | `CPAT_DB_DIALECT` | Database dialect | `mysql` |
 
-### Optional
+#### STIG Manager Integration
+| Variable | Description | Example |
+|---|---|---|
+| `STIGMAN_API_URL` | STIG Manager API URL | `https://stigman.<env>.azurecontainerapps.us/api` |
+| `STIGMAN_OIDC_CLIENT_ID` | STIG Manager OIDC client ID (set same as C-PAT to use single auth) | `d16e6e88-...` |
+| `STIGMAN_SCOPE_PREFIX` | Scope prefix for STIG Manager (must match C-PAT when using same client) | `api://d16e6e88-.../` |
+| `CPAT_SCOPE_PREFIX` | Scope prefix for C-PAT | `api://d16e6e88-.../` |
+
+#### Optional
 | Variable | Description | Default |
 |---|---|---|
 | `CPAT_CLASSIFICATION` | Classification banner | `U` |
-| `CPAT_DOD_DEPLOYMENT` | Enable DoD-specific features | `true` |
+| `CPAT_DOD_DEPLOYMENT` | Enable DoD features | `true` |
 | `CPAT_API_PORT` | API port | `8086` |
-| `CPAT_JWT_USERNAME_CLAIM` | JWT claim for username | `preferred_username` |
-| `CPAT_JWT_NAME_CLAIM` | JWT claim for display name | `name` |
-| `CPAT_JWT_FIRST_NAME_CLAIM` | JWT claim for first name | `given_name` |
-| `CPAT_JWT_AUD_VALUE` | Expected JWT audience | `<app-client-id>` |
-| `CPAT_DB_TLS_CA_FILE` | Path to MySQL CA cert | `/certs/DigiCertGlobalRootCA.crt.pem` |
-| `CPAT_INACTIVITY_TIMEOUT` | Session timeout (minutes) | `15` |
-| `STIGMAN_API_URL` | STIG Manager API URL (if integrated) | `http://localhost:54000/api` |
-| `TENABLE_ENABLED` | Enable Tenable.sc integration | `false` |
+| `CPAT_LOG_LEVEL` | Log level (1-4) | `3` |
 
-### GitHub Secrets (CI/CD)
-Same ACR secrets as LLM Manager:
-- `AZURE_ACR_LOGIN_SERVER`
-- `AZURE_ACR_USERNAME`
-- `AZURE_ACR_PASSWORD`
+### STIG Manager Container App
 
-## Entra ID OIDC Configuration
+| Variable | Description | Example |
+|---|---|---|
+| `STIGMAN_OIDC_PROVIDER` | Entra ID OIDC authority URL | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| `STIGMAN_CLIENT_ID` | Entra ID app client ID | `e4f84457-...` |
+| `STIGMAN_JWT_AUD_VALUE` | Expected JWT audience (set to C-PAT's `api://` URI for cross-app tokens) | `api://d16e6e88-...` |
+| `STIGMAN_JWT_SCOPE_CLAIM` | JWT scope claim (`scp` for Entra) | `scp` |
+| `STIGMAN_JWT_PRIVILEGES_CLAIM` | JWT privileges claim (`roles` for Entra) | `roles` |
+| `STIGMAN_JWT_ASSERTION_CLAIM` | JWT assertion claim (`uti` for Entra) | `uti` |
+| `STIGMAN_JWT_USERNAME_CLAIM` | JWT username claim | `preferred_username` |
+| `STIGMAN_CLIENT_SCOPE_PREFIX` | Scope prefix | `api://e4f84457-.../` |
+| `STIGMAN_CLIENT_STRICT_PKCE` | Disable strict PKCE check (Entra doesn't advertise it) | `false` |
+| `STIGMAN_DB_HOST` | MySQL hostname | `<server>.mysql.database.usgovcloudapi.net` |
+| `STIGMAN_DB_PORT` | MySQL port | `3306` |
+| `STIGMAN_DB_USER` | Database username | `cpatadmin` |
+| `STIGMAN_DB_PASSWORD` | Database password | `<from-key-vault>` |
+| `STIGMAN_DB_SCHEMA` | Database name | `stigman` |
+| `STIGMAN_CLASSIFICATION` | Classification banner | `U` |
+| `STIGMAN_LOG_LEVEL` | Log level (1-4) | `3` |
 
-C-PAT uses standard OIDC with JWKS validation. To configure for Entra ID:
+## Entra ID Configuration
 
-1. Create App Registration in Azure portal
-2. Set redirect URI to the Web App URL
-3. Enable ID tokens under Authentication
-4. Add optional claims: `preferred_username`, `name`, `given_name`, `email`
-5. Set `CPAT_OIDC_PROVIDER` to `https://login.microsoftonline.us/<tenant-id>/v2.0` (Gov) or `https://login.microsoftonline.com/<tenant-id>/v2.0` (Commercial)
-6. Set `CPAT_OIDC_CLIENT_ID` to the app's client ID
-7. Set `CPAT_JWT_AUD_VALUE` to the app's client ID (for audience validation)
+### C-PAT App Registration
+1. Create app registration (Single tenant, SPA platform)
+2. Add SPA redirect URIs: app URL and `/silent-renew.html`
+3. Set identifier URI: `api://<client-id>`
+4. Add API scopes: `c-pat:read`, `c-pat:write`, `c-pat:op`, plus STIG Manager scopes
+5. Add optional access token claims: `preferred_username`, `email`
+6. Create app roles: `admin`, `user`
+7. Pre-authorize the app for its own scopes
+8. Grant admin consent
+
+### STIG Manager App Registration
+1. Create app registration (Single tenant, SPA platform)
+2. Add SPA redirect URIs: STIG Manager URL, C-PAT URL, and `/reauth.html`
+3. Set identifier URI: `api://<client-id>`
+4. Add API scopes: `stig-manager:stig`, `stig-manager:stig:read`, `stig-manager:collection`, etc.
+5. Add optional access token claims: `preferred_username`, `email`
+6. Create app roles: `admin`, `user`
+7. Pre-authorize the app for its own scopes
+8. Grant admin consent
+
+### Key Entra ID Differences from Keycloak
+| Setting | Keycloak | Entra ID |
+|---------|----------|----------|
+| Scope claim | `scope` | `scp` |
+| Assertion claim | `jti` | `uti` |
+| Privileges claim | `realm_access.roles` | `roles` |
+| Audience format | Client ID string | `api://<client-id>` |
+| Scope prefix | (none) | `api://<client-id>/` |
+| PKCE advertisement | Advertised in discovery | Not advertised (set `STIGMAN_CLIENT_STRICT_PKCE=false`) |
+
+### Single OIDC Config Mode (Recommended for Entra ID)
+C-PAT's dual OIDC configuration (separate `cpat` and `stigman` configs) causes issues with Entra ID because PKCE state is lost between sequential redirects. The workaround:
+
+1. Set `STIGMAN_OIDC_CLIENT_ID` to the **same value** as `CPAT_OIDC_CLIENT_ID`
+2. Set `STIGMAN_SCOPE_PREFIX` to the **same value** as `CPAT_SCOPE_PREFIX`
+3. Set STIG Manager's `STIGMAN_JWT_AUD_VALUE` to C-PAT's `api://<client-id>` URI
+
+This makes both OIDC configs share the same token, and C-PAT's client code detects the matching client IDs and handles the auth flow with a single redirect.
 
 ## Database Setup
 
-The application uses Sequelize ORM with automatic migrations. On first startup, it will create the schema and tables automatically.
+Both apps use automatic schema migration on startup.
 
-For Azure MySQL Flexible Server:
-1. Create the server with SSL enforcement enabled
-2. Create a database named `cpat`
-3. Download the DigiCert Global Root CA certificate for SSL connections
-4. Set `CPAT_DB_TLS_CA_FILE` to the cert path
+### MySQL Flexible Server
+1. Create server (Burstable B1ms, MySQL 8.4)
+2. Create databases: `cpat` and `stigman`
+3. Enable `event_scheduler` via Azure CLI (C-PAT migration 0008 requires it):
+   ```bash
+   az mysql flexible-server parameter set --name event_scheduler --value ON
+   ```
+4. Widen `user.userName` column if using long email addresses:
+   ```sql
+   ALTER TABLE cpat.user MODIFY userName varchar(100) NOT NULL;
+   ```
 
-## Deployment Steps
+### Known Migration Issues
+- **Migration 0006**: Initial schema includes `collectionId` on `assetdeltalist` but migration tries to add it again. Fix: drop the column before migration runs, or mark 0006 as complete.
+- **Migration 0008**: Uses `SET GLOBAL event_scheduler = ON` which requires SUPER privilege. Azure MySQL doesn't allow this. Fix: set via Azure CLI and mark 0008 as complete.
 
-1. **Fork done** ✅ — `Ask-Sage/C-PAT`
-2. **CI/CD workflow** ✅ — `.github/workflows/deploy.yml`
-3. **Add ACR secrets** to the repo (same values as LLM Manager)
-4. **Create Azure resources:**
-   - MySQL Flexible Server (Burstable B1ms)
-   - Web App for Containers (B1/S1, Linux)
-   - Entra ID App Registration
-5. **Configure Web App** environment variables
-6. **Push to main** → GitHub Actions builds and pushes to ACR → Web App pulls the image
-7. **First startup** → Sequelize auto-migrates the database schema
+## CI/CD
+
+### GitHub Secrets
+- `AZURE_ACR_LOGIN_SERVER` — ACR login server URL
+- `AZURE_ACR_USERNAME` — ACR admin username
+- `AZURE_ACR_PASSWORD` — ACR admin password
+
+### Deployment
+Push to `main` triggers `.github/workflows/deploy.yml` which builds and pushes to ACR.

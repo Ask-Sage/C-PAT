@@ -23,7 +23,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     return next(req);
   }
 
-  const configId = req.url.includes(stigmanApiUrl) ? 'stigman' : 'cpat';
+  const stigmanDisabled = (CPAT as any)?.Env?.stigman?.clientId === (CPAT as any)?.Env?.oauth?.clientId || !(CPAT as any)?.Env?.stigman?.clientId;
+  const configId = (!stigmanDisabled && req.url.includes(stigmanApiUrl)) ? 'stigman' : 'cpat';
 
   return from(oidcSecurityService.getAccessToken(configId)).pipe(
     map((token) => {

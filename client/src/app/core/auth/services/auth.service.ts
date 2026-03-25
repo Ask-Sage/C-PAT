@@ -90,9 +90,14 @@ export class AuthService {
       });
   }
 
+  private isStigmanDisabled(): boolean {
+    return (CPAT as any)?.Env?.stigman?.clientId === (CPAT as any)?.Env?.oauth?.clientId || !(CPAT as any)?.Env?.stigman?.clientId;
+  }
+
   private updateAuthState(authResults: any): void {
-    const isAuthenticatedStigman = authResults?.find((auth) => auth.configId === 'stigman')?.isAuthenticated ?? false;
-    const isAuthenticatedCpat = authResults?.find((auth) => auth.configId === 'cpat')?.isAuthenticated ?? false;
+    const stigmanDisabled = this.isStigmanDisabled();
+    const isAuthenticatedStigman = stigmanDisabled || (authResults?.find((auth: any) => auth.configId === 'stigman')?.isAuthenticated ?? false);
+    const isAuthenticatedCpat = authResults?.find((auth: any) => auth.configId === 'cpat')?.isAuthenticated ?? false;
 
     this.authState.next({ isAuthenticatedStigman, isAuthenticatedCpat });
   }
@@ -104,7 +109,7 @@ export class AuthService {
 
     const { isAuthenticatedStigman, isAuthenticatedCpat } = this.authState.getValue();
 
-    if (!isAuthenticatedStigman) {
+    if (!isAuthenticatedStigman && !this.isStigmanDisabled()) {
       this.login('stigman');
     } else if (!isAuthenticatedCpat) {
       this.login('cpat');
@@ -116,7 +121,8 @@ export class AuthService {
   }
 
   getAccessToken(configId: string): Observable<string> {
-    return this.oidcSecurityService.getAccessToken(configId).pipe(
+    const effectiveConfigId = (configId === 'stigman' && this.isStigmanDisabled()) ? 'cpat' : configId;
+    return this.oidcSecurityService.getAccessToken(effectiveConfigId).pipe(
       map((token) => {
         if (!token) {
           throw new Error(`Access token not available for config: ${configId}`);
@@ -140,8 +146,11 @@ export class AuthService {
   }
 
   logout(): Observable<void> {
-    return this.oidcSecurityService.logoff('stigman', undefined).pipe(
-      switchMap(() => this.oidcSecurityService.logoff('cpat', undefined)),
+    const logoffFirst = this.isStigmanDisabled()
+      ? this.oidcSecurityService.logoff('cpat', undefined)
+      : this.oidcSecurityService.logoff('stigman', undefined).pipe(
+          switchMap(() => this.oidcSecurityService.logoff('cpat', undefined)));
+    return logoffFirst.pipe(
       tap(() => {
         this.authState.next({
           isAuthenticatedStigman: false,

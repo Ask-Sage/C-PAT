@@ -72,6 +72,44 @@ function getScopeStr(configId: string) {
   return scopes.join(' ');
 }
 
+const cpatOidcConfig = {
+  configId: 'cpat',
+  authority: CPAT.Env.client.authority,
+  redirectUrl: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
+  postLogoutRedirectUri: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
+  clientId: CPAT.Env.oauth.clientId,
+  scope: getScopeStr('cpat'),
+  responseType: 'code',
+  useRefreshToken: true,
+  silentRenew: true,
+  silentRenewUrl: `${globalThis.location.origin}${CPAT.Env.basePath ?? ''}/silent-renew.html`,
+  autoUserInfo: false,
+  renewUserInfoAfterTokenRenew: false,
+  triggerAuthorizationResultEvent: true,
+  strictIssuerValidationOnWellKnownRetrievalOff: true,
+  startCheckSession: true,
+  postLoginRoute: '/',
+  unauthorizedRoute: '/401',
+  forbiddenRoute: '/403',
+  renewTimeBeforeTokenExpiresInSeconds: 15,
+  ignoreNonceAfterRefresh: true,
+  triggerRefreshWhenIdTokenExpired: false,
+  maxIdTokenIatOffsetAllowedInSeconds: 36000,
+  disableIatOffsetValidation: true,
+  disableRefreshIdTokenAuthTimeValidation: true
+};
+
+const usesSameClientId = CPAT.Env.stigman.clientId === CPAT.Env.oauth.clientId || !CPAT.Env.stigman.clientId;
+
+const stigmanOidcConfig = {
+  ...cpatOidcConfig,
+  configId: 'stigman',
+  clientId: usesSameClientId ? CPAT.Env.oauth.clientId : CPAT.Env.stigman.clientId,
+  scope: usesSameClientId ? getScopeStr('cpat') : getScopeStr('stigman'),
+};
+
+const oidcConfigs = [cpatOidcConfig, stigmanOidcConfig];
+
 bootstrapApplication(AppComponent, {
   providers: [
     {
@@ -83,59 +121,7 @@ bootstrapApplication(AppComponent, {
     providePrimeNG({ theme: Noir, ripple: false, inputStyle: 'outlined' }),
     importProvidersFrom(BrowserModule, BrowserAnimationsModule, FormsModule),
     provideAuth(
-      {
-        config: [
-          {
-            configId: 'cpat',
-            authority: CPAT.Env.client.authority,
-            redirectUrl: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
-            postLogoutRedirectUri: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
-            clientId: CPAT.Env.oauth.clientId,
-            scope: getScopeStr('cpat'),
-            responseType: 'code',
-            useRefreshToken: true,
-            silentRenew: true,
-            silentRenewUrl: `${globalThis.location.origin}${CPAT.Env.basePath ?? ''}/silent-renew.html`,
-            autoUserInfo: false,
-            renewUserInfoAfterTokenRenew: false,
-            triggerAuthorizationResultEvent: true,
-            strictIssuerValidationOnWellKnownRetrievalOff: true,
-            startCheckSession: true,
-            postLoginRoute: '/',
-            unauthorizedRoute: '/401',
-            forbiddenRoute: '/403',
-            renewTimeBeforeTokenExpiresInSeconds: 15,
-            ignoreNonceAfterRefresh: true,
-            triggerRefreshWhenIdTokenExpired: false,
-            maxIdTokenIatOffsetAllowedInSeconds: 300,
-            disableRefreshIdTokenAuthTimeValidation: true
-          },
-          {
-            configId: 'stigman',
-            authority: CPAT.Env.client.authority,
-            redirectUrl: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
-            postLogoutRedirectUri: globalThis.location.origin + (CPAT.Env.basePath ?? ''),
-            clientId: CPAT.Env.stigman.clientId,
-            scope: getScopeStr('stigman'),
-            responseType: 'code',
-            useRefreshToken: true,
-            silentRenew: true,
-            silentRenewUrl: `${globalThis.location.origin}${CPAT.Env.basePath ?? ''}/silent-renew.html`,
-            autoUserInfo: false,
-            renewUserInfoAfterTokenRenew: false,
-            triggerAuthorizationResultEvent: true,
-            strictIssuerValidationOnWellKnownRetrievalOff: true,
-            startCheckSession: true,
-            unauthorizedRoute: '/401',
-            forbiddenRoute: '/403',
-            renewTimeBeforeTokenExpiresInSeconds: 15,
-            ignoreNonceAfterRefresh: true,
-            triggerRefreshWhenIdTokenExpired: false,
-            maxIdTokenIatOffsetAllowedInSeconds: 300,
-            disableRefreshIdTokenAuthTimeValidation: true
-          }
-        ]
-      },
+      { config: oidcConfigs },
       withAppInitializerAuthCheck()
     ),
     provideHttpClient(withFetch(), withInterceptors([authInterceptor, authErrorInterceptor])),
